@@ -20,6 +20,7 @@ public class OAuth2Swift: OAuthSwift {
     var access_token_url: String?
     var response_type: String
     var content_type: String?
+    public var refresh_token: String
     
     // MARK: init
     public convenience init(consumerKey: String, consumerSecret: String, authorizeUrl: String, accessTokenUrl: String, responseType: String){
@@ -38,6 +39,7 @@ public class OAuth2Swift: OAuthSwift {
         self.consumer_secret = consumerSecret
         self.authorize_url = authorizeUrl
         self.response_type = responseType
+        self.refresh_token = String()
         super.init(consumerKey: consumerKey, consumerSecret: consumerSecret)
         self.client.credential.version = .OAuth2
     }
@@ -126,7 +128,7 @@ public class OAuth2Swift: OAuthSwift {
                 let responseString = NSString(data: data, encoding: NSUTF8StringEncoding) as String!
                 responseParameters = responseString.parametersFromQueryString()
             }
-            
+
             guard let accessToken = responseParameters["access_token"] else {
                 if let failure = failure {
                     let errorInfo = [NSLocalizedFailureReasonErrorKey: NSLocalizedString("Could not get Access Token", comment: "Due to an error in the OAuth2 process, we couldn't get a valid token.")]
@@ -134,10 +136,60 @@ public class OAuth2Swift: OAuthSwift {
                 }
                 return
             }
+            let refresh_token = responseParameters["refresh_token"]
+            self.refresh_token = refresh_token!
             self.client.credential.oauth_token = accessToken
             success(credential: self.client.credential, response: response, parameters: responseParameters)
         }
 
+        if self.content_type == "multipart/form-data" {
+            self.client.postMultiPartRequest(self.access_token_url!, method: .POST, parameters: parameters, success: successHandler, failure: failure)
+        } else {
+            // special headers
+            var headers: [String:String]? = nil
+            if accessTokenBasicAuthentification {
+                let authentification = "\(self.consumer_key):\(self.consumer_secret)".dataUsingEncoding(NSUTF8StringEncoding)
+                if let base64Encoded = authentification?.base64EncodedStringWithOptions(NSDataBase64EncodingOptions(rawValue: 0))
+                {
+                    headers = ["Authorization": "Basic \(base64Encoded)"]
+                }
+            }
+            self.client.request(self.access_token_url!, method: .POST, parameters: parameters, headers: headers, success: successHandler, failure: failure)
+        }
+    }
+    
+    public func refreshToken(success: TokenSuccessHandler, failure: FailureHandler?) {
+        var parameters = Dictionary<String, AnyObject>()
+    
+        parameters["refresh_token"] = self.refresh_token
+        parameters["grant_type"] = "refresh_token"
+        
+        let successHandler: OAuthSwiftHTTPRequest.SuccessHandler = { [unowned self]
+            data, response in
+            let responseJSON: AnyObject? = try? NSJSONSerialization.JSONObjectWithData(data, options: NSJSONReadingOptions.MutableContainers)
+            
+            let responseParameters: [String:String]
+            
+            if let jsonDico = responseJSON as? [String:AnyObject] {
+                responseParameters = jsonDico.map { (key, value) in (key, String(value)) }
+            } else {
+                let responseString = NSString(data: data, encoding: NSUTF8StringEncoding) as String!
+                responseParameters = responseString.parametersFromQueryString()
+            }
+    
+            guard let accessToken = responseParameters["access_token"] else {
+                if let failure = failure {
+                    let errorInfo = [NSLocalizedFailureReasonErrorKey: NSLocalizedString("Could not get Access Token", comment: "Due to an error in the OAuth2 process, we couldn't get a valid token.")]
+                    failure(error: NSError(domain: OAuthSwiftErrorDomain, code: -1, userInfo: errorInfo))
+                }
+                return
+            }
+            let refresh_token = responseParameters["refresh_token"]
+            self.refresh_token = refresh_token!
+            self.client.credential.oauth_token = accessToken
+            success(credential: self.client.credential, response: response, parameters: responseParameters)
+        }
+        
         if self.content_type == "multipart/form-data" {
             self.client.postMultiPartRequest(self.access_token_url!, method: .POST, parameters: parameters, success: successHandler, failure: failure)
         } else {
